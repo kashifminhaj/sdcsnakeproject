@@ -1,0 +1,564 @@
+package com.example.retrosnake
+
+import android.content.Context
+import android.graphics.*
+import android.view.MotionEvent
+import android.view.View
+import kotlin.math.atan2
+import kotlin.math.sqrt
+
+class GameView(context: Context, private val level: Int = 1) : View(context) {
+    val gameEngine = GameEngine()
+    private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+
+    private var cellSize = 50f
+    private var boardWidth = 0
+    private var boardHeight = 0
+    private var animationOffset = 0f
+    private var pulseAnimation = 0f
+
+    // Menu button properties
+    private val menuButtonSize = 120f
+    private var menuButtonX = 0f
+    private var menuButtonY = 0f
+    private var showPauseMenu = false
+
+    // Joystick properties
+    private var joystickCenterX = 0f
+    private var joystickCenterY = 0f
+    private var joystickX = 0f
+    private var joystickY = 0f
+    private var joystickActive = false
+    private val joystickOuterRadius = 120f
+    private val joystickInnerRadius = 50f
+    private var touchId = -1
+
+    init {
+        setLayerType(LAYER_TYPE_HARDWARE, null)
+    }
+
+    override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
+        super.onSizeChanged(w, h, oldw, oldh)
+
+        if (w > 0 && h > 0) {
+            val maxCellsX = 15
+            val maxCellsY = 20
+
+            cellSize = minOf(w.toFloat() / maxCellsX, h.toFloat() / maxCellsY)
+            boardWidth = maxOf(10, (w / cellSize).toInt())
+            boardHeight = maxOf(15, (h / cellSize).toInt())
+
+            gameEngine.initializeGame(boardWidth, boardHeight, level)
+
+            // Position menu button in top right
+            menuButtonX = w - menuButtonSize - 20f
+            menuButtonY = 20f
+        }
+    }
+
+    override fun onDraw(canvas: Canvas) {
+        super.onDraw(canvas)
+        try {
+            if (boardWidth > 0 && boardHeight > 0) {
+                if (gameEngine.isGameRunning && !showPauseMenu) {
+                    animationOffset = (animationOffset + 0.1f) % 1f
+                    pulseAnimation = (pulseAnimation + 0.05f) % (2f * Math.PI.toFloat())
+                }
+                drawGame(canvas)
+                drawMenuButton(canvas)
+                drawJoystick(canvas)
+
+                if (showPauseMenu) {
+                    drawPauseMenu(canvas)
+                }
+
+                if (gameEngine.isGameRunning || showPauseMenu) {
+                    postInvalidateOnAnimation()
+                }
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
+    private fun drawGame(canvas: Canvas) {
+        // Background
+        canvas.drawColor(Color.parseColor("#1a1a1a"))
+
+        if (gameEngine.playerSnake.isEmpty() || gameEngine.aiSnake.isEmpty()) {
+            return
+        }
+
+        // Draw grid lines
+        paint.color = Color.parseColor("#333333")
+        paint.strokeWidth = 1f
+        for (x in 0..boardWidth) {
+            canvas.drawLine(x * cellSize, 0f, x * cellSize, height.toFloat(), paint)
+        }
+        for (y in 0..boardHeight) {
+            canvas.drawLine(0f, y * cellSize, width.toFloat(), y * cellSize, paint)
+        }
+
+        // Draw obstacles (walls)
+        gameEngine.obstacles.forEach { obstacle ->
+            paint.color = Color.parseColor("#8B8B8B") // Stone gray
+            paint.alpha = 255
+            paint.style = Paint.Style.FILL
+
+            val left = obstacle.x * cellSize + 1f
+            val top = obstacle.y * cellSize + 1f
+            val right = (obstacle.x + 1) * cellSize - 1f
+            val bottom = (obstacle.y + 1) * cellSize - 1f
+
+            // Draw stone block
+            canvas.drawRoundRect(left, top, right, bottom, 4f, 4f, paint)
+
+            // Add 3D highlight
+            paint.color = Color.WHITE
+            paint.alpha = 80
+            canvas.drawRoundRect(
+                left + 3f, top + 3f,
+                right - 3f, bottom - 3f,
+                3f, 3f, paint
+            )
+
+            // Add shadow
+            paint.color = Color.BLACK
+            paint.alpha = 40
+            canvas.drawLine(left, bottom - 1f, right, bottom - 1f, paint)
+            canvas.drawLine(right - 1f, top, right - 1f, bottom, paint)
+        }
+
+        paint.alpha = 255 // Reset alpha
+
+        // Draw player snake (green with gradient and glow)
+        gameEngine.playerSnake.forEachIndexed { index, segment ->
+            val progress = index.toFloat() / gameEngine.playerSnake.size.toFloat()
+            val greenValue = (200 - progress * 100).toInt()
+            paint.color = Color.rgb(76, 175 + greenValue / 10, 80)
+
+            if (index == 0) {
+                paint.color = Color.parseColor("#00FF41")
+                val pulse = (kotlin.math.sin(pulseAnimation.toDouble()) * 5f).toFloat()
+                drawAnimatedCell(canvas, segment.x, segment.y, pulse)
+
+                // Draw eyes on head
+                paint.color = Color.WHITE
+                val eyeSize = cellSize / 6f
+                val eyeY = segment.y * cellSize + cellSize / 3f
+                canvas.drawCircle(segment.x * cellSize + cellSize / 3f, eyeY, eyeSize, paint)
+                canvas.drawCircle(segment.x * cellSize + 2 * cellSize / 3f, eyeY, eyeSize, paint)
+
+                paint.color = Color.BLACK
+                canvas.drawCircle(segment.x * cellSize + cellSize / 3f, eyeY, eyeSize / 2f, paint)
+                canvas.drawCircle(segment.x * cellSize + 2 * cellSize / 3f, eyeY, eyeSize / 2f, paint)
+            } else {
+                val alpha = (255 - progress * 50).toInt()
+                paint.alpha = alpha
+                drawCell(canvas, segment.x, segment.y)
+            }
+        }
+
+        // Draw AI snake (red with gradient and glow)
+        gameEngine.aiSnake.forEachIndexed { index, segment ->
+            val progress = index.toFloat() / gameEngine.aiSnake.size.toFloat()
+            val redValue = (200 - progress * 100).toInt()
+            paint.color = Color.rgb(244 + redValue / 20, 67, 54)
+
+            if (index == 0) {
+                paint.color = Color.parseColor("#FF1744")
+                val pulse = (kotlin.math.sin(pulseAnimation.toDouble() + Math.PI) * 5f).toFloat()
+                drawAnimatedCell(canvas, segment.x, segment.y, pulse)
+
+                // Draw eyes on head
+                paint.color = Color.WHITE
+                val eyeSize = cellSize / 6f
+                val eyeY = segment.y * cellSize + cellSize / 3f
+                canvas.drawCircle(segment.x * cellSize + cellSize / 3f, eyeY, eyeSize, paint)
+                canvas.drawCircle(segment.x * cellSize + 2 * cellSize / 3f, eyeY, eyeSize, paint)
+
+                paint.color = Color.BLACK
+                canvas.drawCircle(segment.x * cellSize + cellSize / 3f, eyeY, eyeSize / 2f, paint)
+                canvas.drawCircle(segment.x * cellSize + 2 * cellSize / 3f, eyeY, eyeSize / 2f, paint)
+            } else {
+                val alpha = (255 - progress * 50).toInt()
+                paint.alpha = alpha
+                drawCell(canvas, segment.x, segment.y)
+            }
+        }
+
+        // Draw all foods
+        gameEngine.foods.forEach { food ->
+            if (food.isPowerUp) {
+                val foodPulse = (kotlin.math.sin(pulseAnimation.toDouble() * 3) * 5f).toFloat()
+                val foodX = food.position.x * cellSize + cellSize/2
+                val foodY = food.position.y * cellSize + cellSize/2
+                val powerUpRadius = cellSize * 1.5f
+
+                paint.color = Color.argb(150, 255, 0, 0)
+                canvas.drawCircle(foodX, foodY, powerUpRadius + foodPulse, paint)
+
+                paint.color = Color.argb(200, 255, 50, 50)
+                canvas.drawCircle(foodX, foodY, powerUpRadius * 0.7f + foodPulse/2, paint)
+
+                paint.color = Color.RED
+                paint.alpha = 255
+                canvas.drawCircle(foodX, foodY, powerUpRadius * 0.5f + foodPulse/3, paint)
+
+                paint.color = Color.WHITE
+                paint.alpha = 200
+                canvas.drawCircle(foodX - cellSize/6, foodY - cellSize/6, cellSize/4, paint)
+
+                paint.color = Color.WHITE
+                paint.textSize = cellSize * 0.6f
+                paint.textAlign = Paint.Align.CENTER
+                paint.alpha = 255
+                canvas.drawText("+3", foodX, foodY + cellSize/6, paint)
+                paint.textAlign = Paint.Align.LEFT
+            } else {
+                val foodPulse = (kotlin.math.sin(pulseAnimation.toDouble() * 2) * 3f).toFloat()
+                val foodX = food.position.x * cellSize + cellSize/2
+                val foodY = food.position.y * cellSize + cellSize/2
+
+                paint.color = Color.argb(100, 255, 255, 0)
+                canvas.drawCircle(foodX, foodY, cellSize/2 + foodPulse, paint)
+
+                paint.color = Color.YELLOW
+                paint.alpha = 255
+                canvas.drawCircle(foodX, foodY, cellSize/3 + foodPulse/2, paint)
+
+                paint.color = Color.WHITE
+                paint.alpha = 150
+                canvas.drawCircle(foodX - cellSize/10, foodY - cellSize/10, cellSize/8, paint)
+            }
+        }
+
+        // Draw scores
+        paint.color = Color.WHITE
+        paint.textSize = 48f
+        paint.alpha = 255
+        paint.textAlign = Paint.Align.LEFT
+        canvas.drawText("You: ${gameEngine.playerScore}", 20f, 60f, paint)
+        canvas.drawText("AI: ${gameEngine.aiScore}", 20f, 120f, paint)
+        canvas.drawText("Level: $level", 20f, 180f, paint)
+
+        // Game over screen
+        if (!gameEngine.isGameRunning) {
+            paint.color = Color.argb(220, 10, 77, 10)
+            paint.style = Paint.Style.FILL
+            canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), paint)
+
+            val scrollWidth = width * 0.75f
+            val scrollHeight = height * 0.6f
+            val scrollLeft = (width - scrollWidth) / 2
+            val scrollTop = (height - scrollHeight) / 2
+
+            paint.color = Color.argb(100, 0, 0, 0)
+            canvas.drawRoundRect(
+                scrollLeft + 10f, scrollTop + 10f,
+                scrollLeft + scrollWidth + 10f, scrollTop + scrollHeight + 10f,
+                20f, 20f, paint
+            )
+
+            paint.color = Color.rgb(242, 183, 82)
+            canvas.drawRoundRect(
+                scrollLeft, scrollTop,
+                scrollLeft + scrollWidth, scrollTop + scrollHeight,
+                20f, 20f, paint
+            )
+
+            paint.style = Paint.Style.STROKE
+            paint.strokeWidth = 8f
+            paint.color = Color.rgb(139, 69, 19)
+            canvas.drawRoundRect(
+                scrollLeft, scrollTop,
+                scrollLeft + scrollWidth, scrollTop + scrollHeight,
+                20f, 20f, paint
+            )
+
+            paint.strokeWidth = 4f
+            paint.color = Color.rgb(210, 150, 60)
+            canvas.drawRoundRect(
+                scrollLeft + 15f, scrollTop + 15f,
+                scrollLeft + scrollWidth - 15f, scrollTop + scrollHeight - 15f,
+                15f, 15f, paint
+            )
+
+            paint.style = Paint.Style.FILL
+            paint.color = Color.WHITE
+            paint.textSize = 80f
+            paint.textAlign = Paint.Align.CENTER
+
+            paint.color = Color.rgb(139, 69, 19)
+            canvas.drawText("GAME OVER", width / 2f + 4f, scrollTop + 90f + 4f, paint)
+
+            paint.color = Color.WHITE
+            canvas.drawText("GAME OVER", width / 2f, scrollTop + 90f, paint)
+
+            paint.color = Color.rgb(0, 200, 0)
+            paint.textSize = 100f
+            val displayScore = if (gameEngine.playerScore > gameEngine.aiScore)
+                gameEngine.playerScore else gameEngine.aiScore
+            canvas.drawText("$displayScore", width / 2f, scrollTop + 220f, paint)
+
+            paint.color = Color.rgb(139, 69, 19)
+            paint.textSize = 36f
+            canvas.drawText(gameEngine.getWinner(), width / 2f, scrollTop + 300f, paint)
+
+            val buttonWidth = scrollWidth * 0.6f
+            val buttonHeight = 80f
+            val buttonLeft = (width - buttonWidth) / 2
+            val buttonTop = scrollTop + scrollHeight - 120f
+
+            paint.style = Paint.Style.FILL
+            paint.color = Color.rgb(139, 69, 19)
+            canvas.drawRoundRect(
+                buttonLeft, buttonTop + 8f,
+                buttonLeft + buttonWidth, buttonTop + buttonHeight + 8f,
+                15f, 15f, paint
+            )
+
+            paint.color = Color.rgb(255, 215, 0)
+            canvas.drawRoundRect(
+                buttonLeft, buttonTop,
+                buttonLeft + buttonWidth, buttonTop + buttonHeight,
+                15f, 15f, paint
+            )
+
+            paint.style = Paint.Style.STROKE
+            paint.strokeWidth = 6f
+            paint.color = Color.rgb(139, 69, 19)
+            canvas.drawRoundRect(
+                buttonLeft, buttonTop,
+                buttonLeft + buttonWidth, buttonTop + buttonHeight,
+                15f, 15f, paint
+            )
+
+            paint.style = Paint.Style.FILL
+            paint.color = Color.rgb(139, 69, 19)
+            paint.textSize = 48f
+            paint.textAlign = Paint.Align.CENTER
+            canvas.drawText("CONTINUE", width / 2f, buttonTop + buttonHeight / 2 + 15f, paint)
+
+            paint.textAlign = Paint.Align.LEFT
+        }
+    }
+
+    private fun drawMenuButton(canvas: Canvas) {
+        paint.style = Paint.Style.FILL
+        paint.color = Color.argb(150, 0, 255, 65)
+        canvas.drawRoundRect(
+            menuButtonX, menuButtonY,
+            menuButtonX + menuButtonSize, menuButtonY + menuButtonSize,
+            15f, 15f, paint
+        )
+
+        paint.color = Color.WHITE
+        paint.strokeWidth = 8f
+        paint.style = Paint.Style.STROKE
+        val lineWidth = menuButtonSize * 0.6f
+        val lineStartX = menuButtonX + (menuButtonSize - lineWidth) / 2
+        val centerY = menuButtonY + menuButtonSize / 2
+
+        canvas.drawLine(lineStartX, centerY - 20f, lineStartX + lineWidth, centerY - 20f, paint)
+        canvas.drawLine(lineStartX, centerY, lineStartX + lineWidth, centerY, paint)
+        canvas.drawLine(lineStartX, centerY + 20f, lineStartX + lineWidth, centerY + 20f, paint)
+    }
+
+    private fun drawPauseMenu(canvas: Canvas) {
+        paint.style = Paint.Style.FILL
+        paint.color = Color.argb(180, 0, 0, 0)
+        canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), paint)
+
+        val menuWidth = width * 0.7f
+        val menuHeight = height * 0.6f
+        val menuLeft = (width - menuWidth) / 2
+        val menuTop = (height - menuHeight) / 2
+
+        paint.color = Color.argb(200, 26, 26, 26)
+        canvas.drawRoundRect(
+            menuLeft, menuTop,
+            menuLeft + menuWidth, menuTop + menuHeight,
+            20f, 20f, paint
+        )
+
+        paint.style = Paint.Style.STROKE
+        paint.strokeWidth = 5f
+        paint.color = Color.parseColor("#00FF41")
+        canvas.drawRoundRect(
+            menuLeft, menuTop,
+            menuLeft + menuWidth, menuTop + menuHeight,
+            20f, 20f, paint
+        )
+
+        paint.style = Paint.Style.FILL
+        paint.color = Color.parseColor("#00FF41")
+        paint.textSize = 60f
+        paint.textAlign = Paint.Align.CENTER
+        canvas.drawText("PAUSED", width / 2f, menuTop + 80f, paint)
+
+        val buttonWidth = menuWidth * 0.8f
+        val buttonHeight = 80f
+        val buttonLeft = menuLeft + (menuWidth - buttonWidth) / 2
+        var buttonTop = menuTop + 150f
+        val buttonSpacing = 100f
+
+        drawPauseMenuButton(canvas, "RESUME", buttonLeft, buttonTop, buttonWidth, buttonHeight, 0)
+        buttonTop += buttonSpacing
+        drawPauseMenuButton(canvas, "RESTART", buttonLeft, buttonTop, buttonWidth, buttonHeight, 1)
+        buttonTop += buttonSpacing
+        drawPauseMenuButton(canvas, "EXIT", buttonLeft, buttonTop, buttonWidth, buttonHeight, 2)
+    }
+
+    private fun drawPauseMenuButton(
+        canvas: Canvas,
+        text: String,
+        left: Float,
+        top: Float,
+        width: Float,
+        height: Float,
+        index: Int
+    ) {
+        paint.style = Paint.Style.FILL
+        paint.color = when(index) {
+            0 -> Color.argb(200, 0, 255, 65)
+            1 -> Color.argb(200, 255, 193, 7)
+            2 -> Color.argb(200, 255, 23, 68)
+            else -> Color.GRAY
+        }
+        canvas.drawRoundRect(left, top, left + width, top + height, 15f, 15f, paint)
+
+        paint.style = Paint.Style.STROKE
+        paint.strokeWidth = 3f
+        paint.color = Color.WHITE
+        canvas.drawRoundRect(left, top, left + width, top + height, 15f, 15f, paint)
+
+        paint.style = Paint.Style.FILL
+        paint.color = Color.WHITE
+        paint.textSize = 48f
+        paint.textAlign = Paint.Align.CENTER
+        canvas.drawText(text, left + width / 2, top + height / 2 + 15f, paint)
+    }
+
+    private fun drawJoystick(canvas: Canvas) {
+        if (!joystickActive) return
+
+        paint.color = Color.argb(100, 255, 255, 255)
+        paint.style = Paint.Style.FILL
+        canvas.drawCircle(joystickCenterX, joystickCenterY, joystickOuterRadius, paint)
+
+        paint.color = Color.argb(150, 255, 255, 255)
+        paint.style = Paint.Style.STROKE
+        paint.strokeWidth = 5f
+        canvas.drawCircle(joystickCenterX, joystickCenterY, joystickOuterRadius, paint)
+
+        paint.style = Paint.Style.FILL
+        paint.color = Color.argb(200, 76, 175, 80)
+        canvas.drawCircle(joystickX, joystickY, joystickInnerRadius, paint)
+
+        paint.color = Color.WHITE
+        canvas.drawCircle(joystickX, joystickY, joystickInnerRadius - 10f, paint)
+    }
+
+    private fun drawCell(canvas: Canvas, x: Int, y: Int) {
+        val left = x * cellSize + 2f
+        val top = y * cellSize + 2f
+        val right = (x + 1) * cellSize - 2f
+        val bottom = (y + 1) * cellSize - 2f
+        canvas.drawRoundRect(left, top, right, bottom, 8f, 8f, paint)
+    }
+
+    private fun drawAnimatedCell(canvas: Canvas, x: Int, y: Int, pulse: Float) {
+        val left = x * cellSize + 2f - pulse
+        val top = y * cellSize + 2f - pulse
+        val right = (x + 1) * cellSize - 2f + pulse
+        val bottom = (y + 1) * cellSize - 2f + pulse
+        canvas.drawRoundRect(left, top, right, bottom, 12f, 12f, paint)
+    }
+
+    override fun onTouchEvent(event: MotionEvent): Boolean {
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN, MotionEvent.ACTION_POINTER_DOWN -> {
+                val pointerIndex = event.actionIndex
+                val pointerId = event.getPointerId(pointerIndex)
+                val x = event.getX(pointerIndex)
+                val y = event.getY(pointerIndex)
+
+                if (!gameEngine.isGameRunning) {
+                    (context as MainActivity).restartGame()
+                    return true
+                }
+
+                if (!joystickActive && y > height / 2) {
+                    joystickActive = true
+                    touchId = pointerId
+                    joystickCenterX = x
+                    joystickCenterY = y
+                    joystickX = x
+                    joystickY = y
+                    invalidate()
+                    return true
+                }
+            }
+
+            MotionEvent.ACTION_MOVE -> {
+                if (joystickActive) {
+                    val pointerIndex = event.findPointerIndex(touchId)
+                    if (pointerIndex != -1) {
+                        val x = event.getX(pointerIndex)
+                        val y = event.getY(pointerIndex)
+
+                        val dx = x - joystickCenterX
+                        val dy = y - joystickCenterY
+                        val distance = sqrt(dx * dx + dy * dy)
+
+                        if (distance < joystickOuterRadius) {
+                            joystickX = x
+                            joystickY = y
+                        } else {
+                            val angle = atan2(dy, dx)
+                            joystickX = joystickCenterX + kotlin.math.cos(angle) * joystickOuterRadius
+                            joystickY = joystickCenterY + kotlin.math.sin(angle) * joystickOuterRadius
+                        }
+
+                        updatePlayerDirection(dx, dy)
+                        invalidate()
+                        return true
+                    }
+                }
+            }
+
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP -> {
+                val pointerIndex = event.actionIndex
+                val pointerId = event.getPointerId(pointerIndex)
+
+                if (pointerId == touchId) {
+                    joystickActive = false
+                    touchId = -1
+                    invalidate()
+                    return true
+                }
+            }
+        }
+        return true
+    }
+
+    private fun updatePlayerDirection(dx: Float, dy: Float) {
+        val threshold = 20f
+
+        if (kotlin.math.abs(dx) < threshold && kotlin.math.abs(dy) < threshold) {
+            return
+        }
+
+        val angle = Math.toDegrees(atan2(dy.toDouble(), dx.toDouble()))
+
+        val newDirection = when {
+            angle >= -45 && angle < 45 -> Direction.RIGHT
+            angle >= 45 && angle < 135 -> Direction.DOWN
+            angle >= -135 && angle < -45 -> Direction.UP
+            else -> Direction.LEFT
+        }
+
+        gameEngine.changePlayerDirection(newDirection)
+    }
+}
