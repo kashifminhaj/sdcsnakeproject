@@ -1,0 +1,198 @@
+package com.example.retrosnake
+
+import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.util.Log
+import android.webkit.WebView
+import android.webkit.WebViewClient
+import android.webkit.WebChromeClient
+import androidx.appcompat.app.AppCompatActivity
+
+class MainActivity : AppCompatActivity() {
+
+    private lateinit var gameView: GameView
+    private lateinit var webView: WebView
+    private val gameHandler = Handler(Looper.getMainLooper())
+    private var gameRunnable: Runnable? = null
+    private var isGamePaused = false
+    private var currentLevel = 1
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+
+        // Hide status bar and make fullscreen
+        window.decorView.systemUiVisibility = (
+                android.view.View.SYSTEM_UI_FLAG_FULLSCREEN
+                        or android.view.View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                        or android.view.View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+                )
+        supportActionBar?.hide()
+
+        setContentView(R.layout.activity_main)
+
+        Log.d("MainActivity", "onCreate started")
+
+        // Initialize WebView
+        webView = findViewById(R.id.webView)
+
+        // Configure WebView settings
+        webView.settings.apply {
+            javaScriptEnabled = true
+            domStorageEnabled = true
+            loadWithOverviewMode = true
+            useWideViewPort = true
+            builtInZoomControls = false
+            displayZoomControls = false
+            setSupportZoom(false)
+            allowFileAccess = true
+            allowContentAccess = true
+        }
+
+        // Keep WebView content within the app
+        webView.webViewClient = object : WebViewClient() {
+            override fun onPageFinished(view: WebView?, url: String?) {
+                super.onPageFinished(view, url)
+                Log.d("MainActivity", "Page loaded: $url")
+            }
+
+            override fun onReceivedError(view: WebView?, errorCode: Int, description: String?, failingUrl: String?) {
+                super.onReceivedError(view, errorCode, description, failingUrl)
+                Log.e("MainActivity", "WebView Error: $description")
+            }
+        }
+
+        webView.webChromeClient = WebChromeClient()
+
+        // Add JavaScript interface to communicate between HTML and Kotlin
+        webView.addJavascriptInterface(WebAppInterface(), "Android")
+
+        // Load your HTML file
+        val htmlPath = "file:///android_asset/index.html"
+        Log.d("MainActivity", "Loading URL: $htmlPath")
+        webView.loadUrl(htmlPath)
+    }
+
+    // JavaScript Interface class
+    inner class WebAppInterface {
+        @android.webkit.JavascriptInterface
+        fun startGame(level: Int) {
+            Log.d("MainActivity", "startGame() called with level: $level")
+            currentLevel = level
+            runOnUiThread {
+                Log.d("MainActivity", "Creating GameView for level $level")
+                // Initialize game view with selected level
+                gameView = GameView(this@MainActivity, level)
+
+                // Set game view as content
+                setContentView(gameView)
+                Log.d("MainActivity", "GameView set as content")
+
+                // Start the game loop
+                isGamePaused = false
+                startGameLoop()
+            }
+        }
+
+        // Backward compatibility - default to level 1
+        @android.webkit.JavascriptInterface
+        fun startGame() {
+            startGame(1)
+        }
+    }
+
+    private fun startGameLoop() {
+        Log.d("MainActivity", "Starting game loop")
+        gameRunnable = object : Runnable {
+            override fun run() {
+                if (::gameView.isInitialized && gameView.gameEngine.isGameRunning && !isGamePaused) {
+                    // Update game state
+                    gameView.gameEngine.update()
+
+                    // Redraw the view
+                    gameView.postInvalidate()
+
+                    // Schedule next update based on level speed
+                    val updateSpeed = gameView.gameEngine.updateSpeed
+                    gameHandler.postDelayed(this, updateSpeed)
+                } else if (::gameView.isInitialized && !gameView.gameEngine.isGameRunning) {
+                    Log.d("MainActivity", "Game ended")
+                    // Game over, stop the loop
+                    gameHandler.removeCallbacks(this)
+                } else if (isGamePaused) {
+                    // Game paused, check again in 100ms
+                    gameHandler.postDelayed(this, 100)
+                }
+            }
+        }
+        gameHandler.post(gameRunnable!!)
+    }
+
+    fun pauseGame() {
+        isGamePaused = true
+    }
+
+    fun resumeGame() {
+        isGamePaused = false
+    }
+
+    fun exitGame() {
+        // Stop game loop
+        gameRunnable?.let { gameHandler.removeCallbacks(it) }
+
+        // Go back to home screen
+        setContentView(R.layout.activity_main)
+        webView = findViewById(R.id.webView)
+        webView.reload()
+    }
+
+    // Called from GameView when user taps on game over screen
+    fun restartGame() {
+        Log.d("MainActivity", "Restarting game at level $currentLevel")
+        // Stop current game loop
+        gameRunnable?.let { gameHandler.removeCallbacks(it) }
+
+        // Create new game with same level
+        gameView = GameView(this, currentLevel)
+        setContentView(gameView)
+
+        // Start new game loop
+        isGamePaused = false
+        startGameLoop()
+    }
+
+    @Deprecated("This method has been deprecated in favor of using the OnBackPressedDispatcher")
+    override fun onBackPressed() {
+        // Stop game loop if running
+        gameRunnable?.let { gameHandler.removeCallbacks(it) }
+
+        // If game is running, go back to home screen
+        if (::gameView.isInitialized && gameView.parent != null) {
+            setContentView(R.layout.activity_main)
+            webView = findViewById(R.id.webView)
+            webView.reload()
+        } else {
+            super.onBackPressed()
+        }
+    }
+
+    override fun onPause() {
+        super.onPause()
+        // Pause game loop when app goes to background
+        isGamePaused = true
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // Resume game loop if game view is active
+        if (::gameView.isInitialized && gameView.parent != null && gameView.gameEngine.isGameRunning) {
+            isGamePaused = false
+        }
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        // Clean up
+        gameRunnable?.let { gameHandler.removeCallbacks(it) }
+    }
+}
