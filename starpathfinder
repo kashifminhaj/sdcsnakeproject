@@ -1,0 +1,206 @@
+package com.example.retrosnake
+
+import java.util.*
+import kotlin.math.abs
+
+data class PathNode(
+    val point: Point,
+    val gScore: Int = 0,
+    val hScore: Int = 0,
+    val parent: PathNode? = null
+) {
+    val fScore: Int get() = gScore + hScore
+}
+
+class AStarPathfinder {
+
+    fun findBestDirection(
+        start: Point,
+        target: Point,
+        aiSnake: List<Point>,
+        playerSnake: List<Point>,
+        boardWidth: Int,
+        boardHeight: Int
+    ): Direction? {
+
+        val simpleDirection = getSimpleDirection(start, target, aiSnake, playerSnake, boardWidth, boardHeight)
+
+        try {
+            val path = findPath(start, target, aiSnake, playerSnake, boardWidth, boardHeight)
+
+            if (path.size >= 2) {
+                val nextPoint = path[1]
+                return getDirectionTo(start, nextPoint)
+            }
+        } catch (e: Exception) {
+            return simpleDirection
+        }
+
+        return simpleDirection
+    }
+
+    private fun findPath(
+        start: Point,
+        target: Point,
+        aiSnake: List<Point>,
+        playerSnake: List<Point>,
+        boardWidth: Int,
+        boardHeight: Int
+    ): List<Point> {
+
+        val openSet = PriorityQueue<PathNode>(compareBy { it.fScore })
+        val closedSet = mutableSetOf<Point>()
+        val gScores = mutableMapOf<Point, Int>()
+
+        val startNode = PathNode(
+            point = start,
+            gScore = 0,
+            hScore = manhattanDistance(start, target)
+        )
+
+        openSet.add(startNode)
+        gScores[start] = 0
+
+        var iterations = 0
+        val maxIterations = 200
+
+        while (openSet.isNotEmpty() && iterations < maxIterations) {
+            iterations++
+
+            val current = openSet.poll()
+
+            if (current.point == target) {
+                return reconstructPath(current)
+            }
+
+            closedSet.add(current.point)
+
+            for (neighbor in getValidNeighbors(current.point, aiSnake, playerSnake, boardWidth, boardHeight)) {
+                if (neighbor in closedSet) continue
+
+                val tentativeGScore = current.gScore + 1
+                val currentGScore = gScores[neighbor] ?: Int.MAX_VALUE
+
+                if (tentativeGScore < currentGScore) {
+                    val neighborNode = PathNode(
+                        point = neighbor,
+                        gScore = tentativeGScore,
+                        hScore = manhattanDistance(neighbor, target),
+                        parent = current
+                    )
+
+                    gScores[neighbor] = tentativeGScore
+                    openSet.removeIf { it.point == neighbor }
+                    openSet.add(neighborNode)
+                }
+            }
+        }
+
+        return emptyList()
+    }
+
+    private fun getValidNeighbors(
+        point: Point,
+        aiSnake: List<Point>,
+        playerSnake: List<Point>,
+        boardWidth: Int,
+        boardHeight: Int
+    ): List<Point> {
+
+        val neighbors = mutableListOf<Point>()
+        val directions = listOf(
+            Point(0, -1),
+            Point(1, 0),
+            Point(0, 1),
+            Point(-1, 0)
+        )
+
+        for (dir in directions) {
+            val newPoint = Point(point.x + dir.x, point.y + dir.y)
+
+            if (newPoint.x in 0 until boardWidth && newPoint.y in 0 until boardHeight) {
+                val aiBody = if (aiSnake.isNotEmpty()) aiSnake.dropLast(1) else emptyList()
+
+                if (!aiBody.contains(newPoint) && !playerSnake.contains(newPoint)) {
+                    neighbors.add(newPoint)
+                }
+            }
+        }
+
+        return neighbors
+    }
+
+    private fun reconstructPath(node: PathNode): List<Point> {
+        val path = mutableListOf<Point>()
+        var current: PathNode? = node
+
+        while (current != null) {
+            path.add(0, current.point)
+            current = current.parent
+        }
+
+        return path
+    }
+
+    private fun manhattanDistance(a: Point, b: Point): Int {
+        return abs(a.x - b.x) + abs(a.y - b.y)
+    }
+
+    private fun getDirectionTo(from: Point, to: Point): Direction {
+        return when {
+            to.x > from.x -> Direction.RIGHT
+            to.x < from.x -> Direction.LEFT
+            to.y > from.y -> Direction.DOWN
+            to.y < from.y -> Direction.UP
+            else -> Direction.RIGHT
+        }
+    }
+
+    private fun getSimpleDirection(
+        start: Point,
+        target: Point,
+        aiSnake: List<Point>,
+        playerSnake: List<Point>,
+        boardWidth: Int,
+        boardHeight: Int
+    ): Direction {
+
+        val possibleDirections = mutableListOf<Direction>()
+
+        if (target.x > start.x) possibleDirections.add(Direction.RIGHT)
+        if (target.x < start.x) possibleDirections.add(Direction.LEFT)
+        if (target.y > start.y) possibleDirections.add(Direction.DOWN)
+        if (target.y < start.y) possibleDirections.add(Direction.UP)
+
+        Direction.values().forEach { dir ->
+            if (!possibleDirections.contains(dir)) {
+                possibleDirections.add(dir)
+            }
+        }
+
+        for (direction in possibleDirections) {
+            val dx = when(direction) {
+                Direction.UP -> 0
+                Direction.DOWN -> 0
+                Direction.LEFT -> -1
+                Direction.RIGHT -> 1
+            }
+            val dy = when(direction) {
+                Direction.UP -> -1
+                Direction.DOWN -> 1
+                Direction.LEFT -> 0
+                Direction.RIGHT -> 0
+            }
+            val nextPoint = Point(start.x + dx, start.y + dy)
+
+            if (nextPoint.x in 0 until boardWidth &&
+                nextPoint.y in 0 until boardHeight &&
+                !aiSnake.contains(nextPoint) &&
+                !playerSnake.contains(nextPoint)) {
+                return direction
+            }
+        }
+
+        return Direction.RIGHT
+    }
+}
